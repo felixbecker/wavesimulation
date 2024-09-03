@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Waveform Mesh</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="waveCanvas"></canvas>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+  <script>
+    const canvas = document.getElementById('waveCanvas');
+    const gl = canvas.getContext('webgl');
+
+    if (!gl) {
+      alert("WebGL wird nicht unterstützt!");
+      throw new Error("WebGL nicht unterstützt");
+    }
+
+    // Vertex-Shader-Programm
+    const vsSource = `
+            attribute vec4 aVertexPosition;
+            uniform mat4 uModelViewMatrix;
+            uniform mat4 uProjectionMatrix;
+            void main(void) {
+                gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
+            }
+        `;
+
+    // Fragment-Shader-Programm
+    const fsSource = `
+            void main(void) {
+                gl_FragColor = vec4(0.3, 0.7, 1.0, 1.0); // Blau-grüne Farbe ähnlich dem Bild
+            }
+        `;
+
+    // Initialisierung eines Shader-Programms
+    function initShaderProgram(gl, vsSource, fsSource) {
+      const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+      const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      const shaderProgram = gl.createProgram();
+      gl.attachShader(shaderProgram, vertexShader);
+      gl.attachShader(shaderProgram, fragmentShader);
+      gl.linkProgram(shaderProgram);
+
+      if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        console.error("Unable to initialize the shader program: " + gl.getProgramInfoLog(shaderProgram));
+        return null;
+      }
+      return shaderProgram;
+    }
+
+    // Erstellen eines Shader-Objekts
+    function loadShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error("An error occurred compiling the shaders: " + gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    // Initialisierung des Shader-Programms
+    const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+    const programInfo = {
+      program: shaderProgram,
+      attribLocations: {
+        vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+      },
+      uniformLocations: {
+        projectionMatrix: gl.getUniformLocation(shaderProgram, 'uProjectionMatrix'),
+        modelViewMatrix: gl.getUniformLocation(shaderProgram, 'uModelViewMatrix'),
+      },
+    };
+
+    // Erstellen der Vertex-Buffer für das 3D-Mesh
+    function initBuffers(gl) {
+      const gridSize = 100; // Größe des Gitters
+      const gridSpacing = 0.2; // Abstand zwischen den Punkten
+      const positions = [];
+      const indices = [];
+
+      // Erstellen der Vertex-Daten für das Grid
+      for (let x = -gridSize; x <= gridSize; x++) {
+        for (let z = -gridSize; z <= gridSize; z++) {
+          positions.push(x * gridSpacing, 0, z * gridSpacing);
+        }
+      }
+
+      // Erstellen der Indizes für die Linien des Meshes
+      for (let x = -gridSize; x < gridSize; x++) {
+        for (let z = -gridSize; z < gridSize; z++) {
+          const i = (x + gridSize) * (2 * gridSize + 1) + (z + gridSize);
+          const nextI = i + (2 * gridSize + 1);
+
+          indices.push(i, nextI); // Vertikale Linien
+          indices.push(i, i + 1); // Horizontale Linien
+          indices.push(nextI, nextI + 1); // Horizontale Linien
+        }
+      }
+
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+      const indexBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+      return {
+        position: positionBuffer,
+        indices: indexBuffer,
+        numIndices: indices.length,
+        positions: positions,
+        gridSize: gridSize,
+        gridSpacing: gridSpacing
+      };
+    }
+
+    const buffers = initBuffers(gl);
+
+    // Funktion zum Erzeugen von Simulationsdaten
+    function simulateWaveform(time) {
+      const frequency1 = 0.3; // Frequenz der ersten Welle
+      const frequency2 = 0.2; // Frequenz der zweiten Welle
+      const amplitude1 = 3.0; // Amplitude der ersten Welle
+      const amplitude2 = 1.5; // Amplitude der zweiten Welle
+      const speed1 = 0.5; // Geschwindigkeit der ersten Welle
+      const speed2 = 0.8; // Geschwindigkeit der zweiten Welle
+      const simulatedData = [];
+
+      for (let i = 0; i < buffers.positions.length; i += 3) {
+        const x = buffers.positions[i];
+        const z = buffers.positions[i + 2];
+
+        // Überlagerung von zwei Sinuswellen
+        const offset = amplitude1 * Math.sin(frequency1 * (x + time * speed1)) +
+          amplitude2 * Math.sin(frequency2 * (z + time * speed2));
+
+        simulatedData.push(x, offset, z); // Update die Position im Buffer
+      }
+
+      return simulatedData;
+    }
+
+    // Zeichnen der Szene
+    function drawScene(gl, programInfo, buffers, modelViewMatrix) {
+      resizeCanvasToDisplaySize(gl.canvas);
+
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      const fieldOfView = 45 * Math.PI / 180;
+      const aspect = gl.canvas.clientWidth / gl.canvas.clientHeight;
+      const zNear = 0.1;
+      const zFar = 100.0;
+      const projectionMatrix = mat4.create();
+
+      mat4.perspective(projectionMatrix, fieldOfView, aspect, zNear, zFar);
+
+      // Attribute aktivieren
+      const numComponents = 3;
+      const type = gl.FLOAT;
+      const normalize = false;
+      const stride = 0;
+      const offset = 0;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+      gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, numComponents, type, normalize, stride, offset);
+      gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+
+      // Verwenden des Programms
+      gl.useProgram(programInfo.program);
+
+      // Uniforms setzen
+      gl.uniformMatrix4fv(programInfo.uniformLocations.projectionMatrix, false, projectionMatrix);
+      gl.uniformMatrix4fv(programInfo.uniformLocations.modelViewMatrix, false, modelViewMatrix);
+
+      // Zeichnen des Gitters im Wireframe-Modus
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.indices);
+      gl.drawElements(gl.LINES, buffers.numIndices, gl.UNSIGNED_SHORT, 0);
+    }
+
+    // Funktion, um die Größe des Canvas an das Fenster anzupassen
+    function resizeCanvasToDisplaySize(canvas) {
+      const displayWidth = canvas.clientWidth;
+      const displayHeight = canvas.clientHeight;
+
+      if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    // Animationsfunktion
+    function animate() {
+      const time = Date.now() * 0.001; // Zeit in Sekunden
+      const simulatedData = simulateWaveform(time);
+
+      // Update der Vertex-Buffer-Daten basierend auf Simulationsdaten
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(simulatedData));
+
+      const modelViewMatrix = mat4.create();
+      mat4.translate(modelViewMatrix, modelViewMatrix, [0.0, -5.0, -20.0]);
+      mat4.rotate(modelViewMatrix, modelViewMatrix, time * 0.1, [0, 1, 0]);
+
+      drawScene(gl, programInfo, buffers, modelViewMatrix);
+
+      requestAnimationFrame(animate);
+    }
+
+    // Animation starten
+    animate();
+  </script>
+</body>
+
+</html>
